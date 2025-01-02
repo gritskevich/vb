@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Virtual Browser Client</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        #stream {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            user-select: none;
+            -webkit-user-select: none;
+            cursor: default;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #stream.clicking {
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <img id="stream" />
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const stream = document.getElementById('stream');
+        const TARGET_WIDTH = 1920;
+        const TARGET_HEIGHT = 1080;
+        const MAX_OFFSET = 20; // Maximum offset at edges
+        
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            const urlParams = new URLSearchParams(window.location.search);
+            const siteFromUrl = urlParams.get('site');
+            if (siteFromUrl) {
+                socket.emit('requestSession', siteFromUrl);
+            }
+        });
+
+        socket.on('frame', (data) => {
+            const blob = new Blob([data], { type: 'image/jpeg' });
+            stream.src = URL.createObjectURL(blob);
+        });
+
+        function getImageDimensions() {
+            const ratio = TARGET_WIDTH / TARGET_HEIGHT;
+            const windowRatio = window.innerWidth / window.innerHeight;
+            
+            let width, height;
+            if (windowRatio > ratio) {
+                height = window.innerHeight;
+                width = height * ratio;
+            } else {
+                width = window.innerWidth;
+                height = width / ratio;
+            }
+            
+            const left = (window.innerWidth - width) / 2;
+            const top = (window.innerHeight - height) / 2;
+            
+            return { width, height, left, top };
+        }
+
+        function calculateDynamicOffset(y, height) {
+            // Convert y to percentage (0 to 1)
+            const relativeY = y / height;
+            
+            // Inverted and adjusted offsets
+            const MAX_TOP_OFFSET = 15;     // Positive offset at the top (moves down)
+            const MAX_BOTTOM_OFFSET = -20; // Negative offset at the bottom (moves up)
+            
+            if (relativeY < 0.5) {
+                // Top half: scale from MAX_TOP_OFFSET to 0
+                const factor = (0.5 - relativeY) * 2; // 1 at top, 0 at middle
+                return MAX_TOP_OFFSET * (factor * factor); // Move down more at top
+            } else {
+                // Bottom half: scale from 0 to MAX_BOTTOM_OFFSET
+                const factor = (relativeY - 0.5) * 2; // 0 at middle, 1 at bottom
+                return MAX_BOTTOM_OFFSET * (factor * factor); // Move up more at bottom
+            }
+        }
+
+        // Handle mouse events with offset
+        stream.addEventListener('click', (e) => {
+            e.preventDefault();
+            
+            const dims = getImageDimensions();
+            const x = e.clientX - dims.left;
+            const y = e.clientY - dims.top;
+            
+            // Calculate base scaled coordinates
+            const scaledX = Math.round((x * TARGET_WIDTH) / dims.width);
+            let scaledY = Math.round((y * TARGET_HEIGHT) / dims.height);
+            
+            // Apply dynamic offset based on vertical position
+            const dynamicOffset = calculateDynamicOffset(y, dims.height);
+            scaledY = Math.round(scaledY + dynamicOffset);
+
+            if (scaledX >= 0 && scaledX <= TARGET_WIDTH && 
+                scaledY >= 0 && scaledY <= TARGET_HEIGHT) {
+                socket.emit('userInput', {
+                    type: 'click',
+                    x: scaledX,
+                    y: scaledY
+                });
+            }
+        });
+
+        stream.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            stream.classList.add('clicking');
+        });
+
+        stream.addEventListener('mouseup', (e) => {
+            e.preventDefault();
+            stream.classList.remove('clicking');
+        });
+
+        // Handle scroll events
+        stream.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            socket.emit('userInput', {
+                type: 'scroll',
+                deltaY: e.deltaY
+            });
+        });
+
+        // Track modifier keys state
+        const modifierKeys = new Set();
+        
+        // Handle key down events
+        document.addEventListener('keydown', (e) => {
+            // Prevent default for special keys to avoid browser shortcuts
+            if ([
+                'Tab',
+                'Enter',
+                'Backspace',
+                'Delete',
+                'ArrowLeft',
+                'ArrowRight',
+                'ArrowUp',
+                'ArrowDown'
+            ].includes(e.key)) {
+                e.preventDefault();
+            }
+
+            // Track modifier keys
+            if (['Shift', 'Control', 'Alt'].includes(e.key)) {
+                modifierKeys.add(e.key);
+            }
+
+            // Send the key event with modifiers
+            socket.emit('userInput', {
+                type: 'keyboard',
+                text: e.key.length === 1 ? e.key : '',  // Only send single characters as text
+                key: e.key,
+                modifiers: Array.from(modifierKeys)
+            });
+        });
+
+        // Handle key up events for modifiers
+        document.addEventListener('keyup', (e) => {
+            if (['Shift', 'Control', 'Alt'].includes(e.key)) {
+                modifierKeys.delete(e.key);
+                socket.emit('userInput', {
+                    type: 'keyboard',
+                    key: e.key,
+                    modifiers: Array.from(modifierKeys)
+                });
+            }
+        });
+
+        // Handle navigation messages from the virtual browser
+        window.addEventListener('message', (event) => {
+            console.log('Message received:', event.data);
+            
+            if (event.data && event.data.type === 'navigation' && event.data.url) {
+                console.log('Navigation requested to:', event.data.url);
+                
+                // Update the URL parameter and reload
+                const newUrl = new URL(window.location.href);
+                const oldSite = newUrl.searchParams.get('site');
+                const newSite = event.data.url;
+                
+                // Only navigate if the URL is different
+                if (oldSite !== newSite) {
+                    newUrl.searchParams.set('site', newSite);
+                    console.log('Navigating to:', newUrl.toString());
+                    window.location.replace(newUrl.toString());
+                } else {
+                    console.log('Already at requested URL');
+                }
+            }
+        });
+
+        // Add cleanup function
+        async function cleanupCache() {
+            try {
+                const response = await fetch('/cleanup', { method: 'POST' });
+                const result = await response.json();
+                console.log('Cleanup result:', result);
+            } catch (error) {
+                console.error('Cleanup failed:', error);
+            }
+        }
+
+        // Make it available globally
+        window.cleanupCache = cleanupCache;
+
+        // Handle navigation events from the server
+        socket.on('navigation', (data) => {
+            if (data.url) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('site', data.url);
+                window.history.replaceState({}, '', newUrl.toString());
+            }
+        });
+    </script>
+</body>
+</html> 

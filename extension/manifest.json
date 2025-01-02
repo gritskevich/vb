@@ -1,0 +1,22 @@
+{
+    "manifest_version": 3,
+    "name": "Virtual Browser Proxy",
+    "version": "1.0",
+    "description": "Redirects web requests through virtual browser proxy",
+    "permissions": [],
+    "host_permissions": [
+      "<all_urls>",
+      "http://localhost:3000/*"
+    ],
+    "content_scripts": [
+      {
+        "matches": ["<all_urls>"],
+        "exclude_matches": ["http://localhost:*/*"],
+        "js": ["content.js"],
+        "run_at": "document_start"
+      }
+    ],
+    "background": {
+      "service_worker": "background.js"
+    }
+  }
