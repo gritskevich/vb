@@ -1,9 +1,9 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { BrowserManager } = require('./browserManager');
-const { StreamManager } = require('./streamManager');
-const { CleanupService } = require('./cleanupService');
+const { BrowserManager } = require('./services/browserManager');
+const { StreamManager } = require('./services/streamManager');
+const { CleanupService } = require('./services/cleanupService');
 
 class RenderingServer {
     constructor(port = 3000) {
