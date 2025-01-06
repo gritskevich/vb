@@ -17,10 +17,19 @@ class RenderingServer {
         this.setupSocketIO();
         this.cleanupService = new CleanupService();
         this.startCleanupInterval();
+
+        // Add health check interval
+        this.healthCheckInterval = 30000; // 30 seconds
+        this.setupSocketHealthCheck();
     }
 
     setupExpress() {
         this.app.use(express.static('public'));
+        
+        // Add health check endpoint
+        this.app.get('/health', (req, res) => {
+            res.json({ status: 'ok' });
+        });
         
         // Add cleanup endpoint
         this.app.post('/cleanup', async (req, res) => {
@@ -144,6 +153,27 @@ class RenderingServer {
         
         // Final cleanup of temp directories
         await this.cleanupService.cleanup();
+    }
+
+    setupSocketHealthCheck() {
+        setInterval(() => {
+            if (this.io) {
+                const sockets = Array.from(this.io.sockets.sockets.values());
+                sockets.forEach(socket => {
+                    if (!socket.pingCount) socket.pingCount = 0;
+
+                    // Check if socket is still responding
+                    socket.emit('ping');
+                    socket.pingCount++;
+
+                    // If socket hasn't responded to 3 pings, disconnect it
+                    if (socket.pingCount > 3) {
+                        console.log('Socket not responding, disconnecting:', socket.id);
+                        socket.disconnect(true);
+                    }
+                });
+            }
+        }, this.healthCheckInterval);
     }
 }
 
