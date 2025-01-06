@@ -6,12 +6,12 @@
     "permissions": [],
     "host_permissions": [
       "<all_urls>",
-      "http://34.163.119.73:3000/*"
+      "http://localhost:3000/*"
     ],
     "content_scripts": [
       {
         "matches": ["<all_urls>"],
-        "exclude_matches": ["http://34.163.119.73:*/*"],
+        "exclude_matches": ["http://localhost:*/*"],
         "js": ["content.js"],
         "run_at": "document_start"
       }
