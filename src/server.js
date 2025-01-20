@@ -4,6 +4,14 @@ const { Server } = require('socket.io');
 const { BrowserManager } = require('./services/browserManager');
 const { StreamManager } = require('./services/streamManager');
 const { CleanupService } = require('./services/cleanupService');
+const MonitoringService = require('./services/monitoringService');
+
+// Debug check
+if (typeof MonitoringService !== 'function') {
+    throw new Error(`MonitoringService is ${typeof MonitoringService}, expected function`);
+}
+
+console.log('MonitoringService:', MonitoringService);
 
 class RenderingServer {
     constructor(port = 3000) {
@@ -13,6 +21,17 @@ class RenderingServer {
         this.io = new Server(this.server);
         this.sessions = new Map(); // Store active sessions
         
+        // Add debug log
+        console.log('Initializing MonitoringService');
+        this.monitoring = new MonitoringService();
+        
+        // Add request tracking middleware FIRST
+        this.app.use((req, res, next) => {
+            const endTimer = this.monitoring.trackRequest(req.method, req.path);
+            res.on('finish', endTimer);
+            next();
+        });
+
         this.setupExpress();
         this.setupSocketIO();
         this.cleanupService = new CleanupService();
@@ -36,11 +55,35 @@ class RenderingServer {
                 res.status(500).json({ success: false, error: error.message });
             }
         });
+
+        this.app.get('/metrics', async (req, res) => {
+            const metrics = await this.monitoring.getMetrics();
+            
+            // Return JSON if requested
+            if (req.headers.accept === 'application/json') {
+                return res.json(metrics.json);
+            }
+            
+            // Default to Prometheus format
+            res.set('Content-Type', this.monitoring.getContentType());
+            res.end(metrics.prometheus);
+        });
+
+        // Add request timing middleware
+        this.app.use((req, res, next) => {
+            console.log(`[METRICS] Request started: ${req.method} ${req.path}`);
+            const end = this.monitoring.trackRequest(req.method, req.path);
+            res.on('finish', () => {
+                console.log(`[METRICS] Request finished: ${req.method} ${req.path}`);
+                end();
+            });
+            next();
+        });
     }
 
     setupSocketIO() {
         this.io.on('connection', (socket) => {
-            console.log('Client connected:', socket.id);
+            const removeConnection = this.monitoring.logConnection(socket.id);
             
             let browserManager = null;
             let streamManager = null;
@@ -53,10 +96,10 @@ class RenderingServer {
                     }
 
                     // Create new session
-                    browserManager = new BrowserManager();
+                    const browserManager = new BrowserManager(this.monitoring);
                     await browserManager.initialize();
                     
-                    streamManager = new StreamManager(socket);
+                    streamManager = new StreamManager(socket, this.monitoring);
                     
                     // Add navigation handler
                     browserManager.onNavigate = (url) => {
@@ -66,13 +109,11 @@ class RenderingServer {
                     // Store session
                     this.sessions.set(socket.id, { browserManager, streamManager });
 
-                    // Navigate and start streaming
+                    // Navigate using the monitored method
                     await browserManager.navigate(url);
                     await streamManager.startStreaming(browserManager);
                 } catch (error) {
-                    console.error('Session setup error:', error);
-                    socket.emit('error', { message: 'Failed to start session' });
-                    await this.cleanupSession(socket.id);
+                    this.monitoring.logError('session', error);
                 }
             });
 
@@ -87,9 +128,29 @@ class RenderingServer {
                 }
             });
 
-            socket.on('disconnect', async () => {
-                console.log('Client disconnected:', socket.id);
-                await this.cleanupSession(socket.id);
+            socket.on('disconnect', removeConnection);
+
+            socket.on('page', async ({ url }) => {
+                try {
+                    const session = this.sessions.get(socket.id);
+                    if (!session) return;
+
+                    // Start timing the navigation
+                    const navigation = this.monitoring.startNavigation(url);
+
+                    try {
+                        await session.page.goto(url, {
+                            waitUntil: 'networkidle0',
+                            timeout: 30000
+                        });
+                        navigation.success();
+                    } catch (error) {
+                        navigation.error(error);
+                        throw error;
+                    }
+                } catch (error) {
+                    console.error('Navigation error:', error);
+                }
             });
         });
     }

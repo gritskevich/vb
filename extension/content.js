@@ -4,5 +4,5 @@ if (!window.location.href.includes('localhost')) {
     const currentUrl = window.location.href;
     
     // Redirect to our virtual browser
-    window.location.href = `http://localhost:3000/?site=${encodeURIComponent(currentUrl)}`;
+    window.location.href = `http://localhost/?site=${encodeURIComponent(currentUrl)}`;
 } 

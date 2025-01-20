@@ -4,7 +4,8 @@ const fs = require('fs').promises;
 const os = require('os');
 
 class BrowserManager {
-    constructor() {
+    constructor(monitoring) {
+        this.monitoring = monitoring;
         this.browser = null;
         this.page = null;
         this.isNavigating = false;
